@@ -1,4 +1,4 @@
-#   Copyright (c) 2021 PPViT Authors. All Rights Reserved.
+# Copyright (c) 2021 PPViT Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,34 +35,42 @@ _C.DATA.DATASET = 'imagenet2012' # dataset name
 _C.DATA.IMAGE_SIZE = 256 # input image size
 _C.DATA.CROP_PCT = 0.94 # input image scale ratio, scale is applied before centercrop in eval mode
 _C.DATA.NUM_WORKERS = 4 # number of data loading threads
+_C.DATA.IMAGENET_MEAN = [0.485, 0.456, 0.406] # [0.5, 0.5, 0.5]
+_C.DATA.IMAGENET_STD = [0.229, 0.224, 0.225] # [0.5, 0.5, 0.5]
 
 # model settings
 _C.MODEL = CN()
-#################################################################
-'''
-config是一个对模型配置的管理。可以通过_C()创建一个子对象，子对象之间可以嵌套。config文件可以通过.yaml文件更新config具体配置。
-
-你的模型的参数要在这个完成，你可以参考原文中从config完成，但是需要注意的是，原文的config可能在MODEL子对象生成了其他的子对象，
-你需要把子对象拆开，直接对MODEL进行赋值。
-
-
-'''
-#################################################################
+_C.MODEL.TYPE = 'CvT'
+_C.MODEL.NAME = 'CvT'
+_C.MODEL.INIT_WEIGHTS = True
+_C.MODEL.PRETRAINED = ''
+_C.MODEL.RESUME = None
+_C.MODEL.PRETRAINED_LAYERS = ['*']
+_C.MODEL.NUM_CLASSES = 1000
+_C.MODEL.NUM_STAGES=3
+_C.MODEL.PATCH_SIZE=[7, 3, 3]
+_C.MODEL.PATCH_STRIDE=[4 ,2, 2]
+_C.MODEL.PATCH_PADDING=[ 2, 1, 1]
+_C.MODEL.DIM_EMBED=[64, 192, 384]
+_C.MODEL.DEPTH=[1,2,10]
+_C.MODEL.NUM_HEADS=[1, 3, 6]
+_C.MODEL.DROP_RATE=[0.0, 0.0, 0.0]
+_C.MODEL.ATTN_DROP_RATE=[0.0, 0.0, 0.0]
+_C.MODEL.DROP_PATH_RATE=[0.0, 0.0, 0.1]
+_C.MODEL.CLS_TOKEN=[False, False, True]
 
 # training settings
 _C.TRAIN = CN()
 _C.TRAIN.LAST_EPOCH = 0
 _C.TRAIN.NUM_EPOCHS = 300
-_C.TRAIN.WARMUP_EPOCHS = 3
-_C.TRAIN.WEIGHT_DECAY = 0.01
-_C.TRAIN.BASE_LR = 0.002
-_C.TRAIN.WARMUP_START_LR = 0.0002
-_C.TRAIN.END_LR = 0.0002
+_C.TRAIN.WARMUP_EPOCHS = 5
+_C.TRAIN.WEIGHT_DECAY = 0.05
+_C.TRAIN.BASE_LR = 5e-4
+_C.TRAIN.WARMUP_START_LR = 2e-6
+_C.TRAIN.END_LR = 2e-5
 _C.TRAIN.GRAD_CLIP = None
 _C.TRAIN.ACCUM_ITER = 1
-_C.TRAIN.MODEL_EMA = True
-_C.TRAIN.MODEL_EMA_DECAY = 0.99996
-_C.TRAIN.LINEAR_SCALED_LR = None
+_C.TRAIN.LINEAR_SCALED_LR = 512
 
 _C.TRAIN.LR_SCHEDULER = CN()
 _C.TRAIN.LR_SCHEDULER.NAME = 'warmupcosine'
@@ -151,6 +159,8 @@ def update_config(config, args):
         config.DATA.IMAGE_SIZE = args.image_size
     if args.data_path:
         config.DATA.DATA_PATH = args.data_path
+    if args.output is not None:
+        config.SAVE = args.output
     if args.ngpus:
         config.NGPUS = args.ngpus
     if args.eval:
