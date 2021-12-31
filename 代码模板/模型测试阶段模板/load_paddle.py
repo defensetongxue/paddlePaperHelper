@@ -1,10 +1,11 @@
 import paddle
 import torch
 import numpy as np
-from botnet import botnet50
-from botnet_torch import botnet50_torch
 import os
-import pdb
+
+# 引入paddle和pytorch模型，这是你需要根据自己的模型更改的部分
+from pytorch_file import  py_model
+from paddle_file import  pa_model
 
 def print_model_named_params(model):
     print('----------------------------------')
@@ -18,55 +19,47 @@ def print_model_named_buffers(model):
         print(name, param.shape)
     print('----------------------------------')
 
+# 以下是针对cvt的torch模型权重到paddle模型权重的映射函数
 def torch_to_paddle_mapping():
-    mapping = [
-        ('0', '0'),
-        ('1', '1'),
-    ]
-    
-    num_stages = 8
-    num_blocks = [0, 0, 0, 0, 3, 4, 6, 3]
+    # mapping会存储全部网络权重映射的tuple
+    mapping = [('stage2.cls_token', 'stages.2.cls_token')]
+
+    # 根据网络的深度，如果有重复的映射则写入循环中
+    depths = [2, 2, 20]
+    num_stages = len(depths)
     for stage_idx in range(num_stages):
-        if stage_idx == 7:
-            mapping.extend([
-                (f'7.net.0.shortcut.0', f'7.net.0.shortcut.0'),
-                (f'7.net.0.shortcut.1', f'7.net.0.shortcut.1'),
-            ])
-        for block_idx in range(num_blocks[stage_idx]):
-            if num_blocks[stage_idx] == 0:
-                break
-            if stage_idx == 7:
-                pp_prefix = f'{stage_idx}.net.{block_idx}'
-                th_prefix = f'{stage_idx}.net.{block_idx}'
-                layer_mapping = [
-                    (f'{th_prefix}.net.0', f'{pp_prefix}.net.0'),
-                    (f'{th_prefix}.net.1', f'{pp_prefix}.net.1'),
-                    (f'{th_prefix}.net.3.to_qk', f'{pp_prefix}.net.3.to_qk'),
-                    (f'{th_prefix}.net.3.to_v', f'{pp_prefix}.net.3.to_v'),
-                    (f'{th_prefix}.net.3.pos_emb', f'{pp_prefix}.net.3.pos_emb'),
-                    (f'{th_prefix}.net.5', f'{pp_prefix}.net.5'),
-                    (f'{th_prefix}.net.7', f'{pp_prefix}.net.7'),
-                    (f'{th_prefix}.net.8', f'{pp_prefix}.net.8'),
-                ]
-                mapping.extend(layer_mapping)
-            else:
-                pp_prefix = f'{stage_idx}.{block_idx}'
-                th_prefix = f'{stage_idx}.{block_idx}'
-                layer_mapping = [
-                    (f'{th_prefix}.conv1', f'{pp_prefix}.conv1'),
-                    (f'{th_prefix}.bn1', f'{pp_prefix}.bn1'),
-                    (f'{th_prefix}.conv2', f'{pp_prefix}.conv2'),
-                    (f'{th_prefix}.bn2', f'{pp_prefix}.bn2'),
-                    (f'{th_prefix}.conv3', f'{pp_prefix}.conv3'),
-                    (f'{th_prefix}.bn3', f'{pp_prefix}.bn3'),
-                ]
-                mapping.extend(layer_mapping)
-                if block_idx == 0:
-                    mapping.extend([
-                        (f'{th_prefix}.downsample.0', f'{pp_prefix}.downsample.0'),
-                        (f'{th_prefix}.downsample.1', f'{pp_prefix}.downsample.1'),
-                    ])
-    mapping.extend([('10', '10')])
+        pp_s_prefix = f'stages.{stage_idx}'
+        th_s_prefix = f'stage{stage_idx}'
+        layer_mapping = [
+            (f'{th_s_prefix}.patch_embed.proj', f'{pp_s_prefix}.patch_embed.proj'),
+            (f'{th_s_prefix}.patch_embed.norm', f'{pp_s_prefix}.patch_embed.norm'),
+        ] 
+        mapping.extend(layer_mapping)
+
+        for block_idx in range(depths[stage_idx]):
+            th_b_prefix = f'{th_s_prefix}.blocks.{block_idx}'
+            pp_b_prefix = f'{pp_s_prefix}.blocks.{block_idx}'
+            layer_mapping = [
+                (f'{th_b_prefix}.norm1', f'{pp_b_prefix}.norm1'),
+                (f'{th_b_prefix}.attn.conv_proj_q.conv', f'{pp_b_prefix}.attn.conv_proj_q.0'),
+                (f'{th_b_prefix}.attn.conv_proj_q.bn', f'{pp_b_prefix}.attn.conv_proj_q.1'),
+                (f'{th_b_prefix}.attn.conv_proj_k.conv', f'{pp_b_prefix}.attn.conv_proj_k.0'),
+                (f'{th_b_prefix}.attn.conv_proj_k.bn', f'{pp_b_prefix}.attn.conv_proj_k.1'),
+                (f'{th_b_prefix}.attn.conv_proj_v.conv', f'{pp_b_prefix}.attn.conv_proj_v.0'),
+                (f'{th_b_prefix}.attn.conv_proj_v.bn', f'{pp_b_prefix}.attn.conv_proj_v.1'),
+                (f'{th_b_prefix}.attn.proj_q', f'{pp_b_prefix}.attn.proj_q'),
+                (f'{th_b_prefix}.attn.proj_k', f'{pp_b_prefix}.attn.proj_k'),
+                (f'{th_b_prefix}.attn.proj_v', f'{pp_b_prefix}.attn.proj_v'),
+                (f'{th_b_prefix}.attn.proj', f'{pp_b_prefix}.attn.proj'),
+                (f'{th_b_prefix}.norm2', f'{pp_b_prefix}.norm2'),
+                (f'{th_b_prefix}.mlp.fc1', f'{pp_b_prefix}.mlp.fc1'),
+                (f'{th_b_prefix}.mlp.fc2', f'{pp_b_prefix}.mlp.fc2'),
+            ]
+            mapping.extend(layer_mapping)
+
+    mapping.extend([
+        ('norm', 'norm'),
+        ('head', 'head')])
     return mapping
 
 def convert(torch_model, paddle_model):
@@ -76,8 +69,9 @@ def convert(torch_model, paddle_model):
         #assert th_shape == pd_shape, f'{th_shape} != {pd_shape}'
         print(f'set {th_name} {th_shape} to {pd_name} {pd_shape}')
         value = th_params[th_name].data.numpy()
-        if len(value.shape) == 2 and th_shape != pd_shape:
-            value = value.transpose((1, 0))
+        if len(value.shape) == 2:
+            if not no_transpose:
+                value = value.transpose((1, 0))
         pd_params[pd_name].set_value(value)
     
     # 1. get paddle and torch model parameters
@@ -103,6 +97,8 @@ def convert(torch_model, paddle_model):
             else:
                 _set_value(th_name, pd_name)
         else: # weight & bias
+            # 你需要根据你的模型权重加入以下部分，针对th_params中没有的权重关键词进行单独映射设置
+            # 以下是cvt实例
             if f'{th_name}.weight' in th_params.keys():
                 th_name_w = f'{th_name}.weight'
                 pd_name_w = f'{pd_name}.weight'
@@ -112,38 +108,31 @@ def convert(torch_model, paddle_model):
                 th_name_b = f'{th_name}.bias'
                 pd_name_b = f'{pd_name}.bias'
                 _set_value(th_name_b, pd_name_b)
-            
+
             if f'{th_name}.running_mean' in th_params.keys():
-                th_name_rm = f'{th_name}.running_mean'
-                pd_name_rm = f'{pd_name}._mean'
-                _set_value(th_name_rm, pd_name_rm)
+                th_name_b = f'{th_name}.running_mean'
+                pd_name_b = f'{pd_name}._mean'
+                _set_value(th_name_b, pd_name_b)
 
             if f'{th_name}.running_var' in th_params.keys():
-                th_name_rv = f'{th_name}.running_var'
-                pd_name_rv = f'{pd_name}._variance'
-                _set_value(th_name_rv, pd_name_rv)
-
-            if f'{th_name}.rel_height' in th_params.keys():
-                th_name_rh = f'{th_name}.rel_height'
-                pd_name_rh = f'{pd_name}.rel_height'
-                _set_value(th_name_rh, pd_name_rh)
-            
-            if f'{th_name}.rel_width' in th_params.keys():
-                th_name_rw = f'{th_name}.rel_width'
-                pd_name_rw = f'{pd_name}.rel_width'
-                _set_value(th_name_rw, pd_name_rw)
+                th_name_b = f'{th_name}.running_var'
+                pd_name_b = f'{pd_name}._variance'
+                _set_value(th_name_b, pd_name_b)
 
     return paddle_model
 
 def main():
-    paddle_model = botnet50()
+    # 导入你自己的paddle模型
+    paddle_model = pa_model()
     paddle_model.eval()
     print_model_named_params(paddle_model)
     print_model_named_buffers(paddle_model)
 
     print('+++++++++++++++++++++++++++++++++++')
     device = torch.device('cpu')
-    torch_model = botnet50_torch(pretrained=True)
+
+    # 导入你自己的pytorch模型
+    torch_model = py_model(pretrained=True)
     torch_model.eval()
     print_model_named_params(torch_model)
     print_model_named_buffers(torch_model)
@@ -151,11 +140,8 @@ def main():
     # convert weights
     paddle_model = convert(torch_model, paddle_model)
 
-    a = torch_model.state_dict()
-    b = paddle_model.state_dict()
-
     # check correctness
-    x = np.ones([2, 3, 224, 224]).astype('float32')
+    x = np.random.randn([2, 3, 224, 224]).astype('float32')
     x_paddle = paddle.to_tensor(x)
     x_torch = torch.Tensor(x).to(device)
 
@@ -172,17 +158,13 @@ def main():
     print(out_torch.shape, out_paddle.shape)
     print(out_torch[0, 0:20])
     print(out_paddle[0, 0:20])
-    a = torch_model.state_dict()
-    b = paddle_model.state_dict()
     assert np.allclose(out_torch, out_paddle, atol = 1e-4)
 
     # save weights for paddle model
-    model_path = os.path.join(r'D:\app\vscode\py\paddle\test\botnet50.pdparams')
+    # 加入你自己存储模型的位置，存储文件后缀固定为pdparams
+    model_path = os.path.join('your_save_path/model.pdparams')
     paddle.save(paddle_model.state_dict(), model_path)
 
 
 if __name__ == "__main__":
     main()
-
-# model = botnet50()
-# print_model_named_params(model)
